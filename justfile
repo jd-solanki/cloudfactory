@@ -1,10 +1,20 @@
+skill_prefix := "--skill .agents/skills"
+grilling_skills := skill_prefix + "/grilling " + skill_prefix + "/grill-with-docs"
+context7_skills := skill_prefix + "/context7-cli " + skill_prefix + "/find-docs"
+discussion_skills := context7_skills + " " + skill_prefix + "/research " + skill_prefix + "/roadmap " + skill_prefix + "/writing-for-agents " + skill_prefix + "/writing-for-humans"
+cloudflare_skills := skill_prefix + "/cloudflare " + skill_prefix + "/durable-objects " + skill_prefix + "/sandbox-stable " + skill_prefix + "/workers-best-practices " + skill_prefix + "/wrangler"
+
 default:
     @just --list
 
-# g1
+pi:
+    pi --no-skills
+
+pi-que:
+    pi --no-skills {{context7_skills}}
 
 pi-discuss:
-    pi --no-skills --skill .agents/skills/context7-cli --skill .agents/skills/find-docs --skill .agents/skills/research --skill .agents/skills/roadmap --skill .agents/skills/writing-for-agents --skill .agents/skills/writing-for-humans
+    pi --no-skills {{grilling_skills}} {{discussion_skills}}
 
 pi-discuss-cf:
-    pi --no-skills --skill .agents/skills/context7-cli --skill .agents/skills/find-docs --skill .agents/skills/research --skill .agents/skills/roadmap --skill .agents/skills/writing-for-agents --skill .agents/skills/writing-for-humans --skill .agents/skills/cloudflare --skill .agents/skills/durable-objects --skill .agents/skills/sandbox-stable --skill .agents/skills/workers-best-practices --skill .agents/skills/wrangler
+    pi --no-skills {{grilling_skills}} {{discussion_skills}} {{cloudflare_skills}}
