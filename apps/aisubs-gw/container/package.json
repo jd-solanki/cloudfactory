@@ -1,0 +1,8 @@
+{
+  "name": "aisubs-gw-container",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "aisubs": "^0.3.3"
+  }
+}
