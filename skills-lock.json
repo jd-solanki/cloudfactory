@@ -139,11 +139,23 @@
       "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
       "computedHash": "2449db6ab1ded9581f69fcc56c1f64818112d05e271fd4c5da23c6523f9d3d9d"
     },
-    "link-skills": {
-      "source": "jd-solanki/skills",
+    "ponytail": {
+      "source": "dietrichgebert/ponytail",
       "sourceType": "github",
-      "skillPath": "skills/productivity/link-skills/SKILL.md",
-      "computedHash": "3a3bad4d724ae24aa09f6888257e65d98b42786f982130e5558516cd124ce4b1"
+      "skillPath": "skills/ponytail/SKILL.md",
+      "computedHash": "210fa0831f649ce9f8a305f7b7c8cf2a0dd09ac4dd53067109941b96e7811d4e"
+    },
+    "ponytail-audit": {
+      "source": "dietrichgebert/ponytail",
+      "sourceType": "github",
+      "skillPath": "skills/ponytail-audit/SKILL.md",
+      "computedHash": "8b8d72e6ff70b65b6c9518d470fcf29dc696eea93d28f3efa10fdcc60cbd696d"
+    },
+    "ponytail-review": {
+      "source": "dietrichgebert/ponytail",
+      "sourceType": "github",
+      "skillPath": "skills/ponytail-review/SKILL.md",
+      "computedHash": "4646594fcd75455533f7ff1425f4f1c5ba0fa65f88241bf262b1c4fc275f049a"
     },
     "research": {
       "source": "mattpocock/skills",
@@ -162,6 +174,12 @@
       "sourceType": "github",
       "skillPath": "skills/in-progress/roadmap/SKILL.md",
       "computedHash": "40c905e4e04ae3b87c14d81b2c51ff625f8bd9488412865601b380537a68068a"
+    },
+    "sandbox-next": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "skillPath": "skills/sandbox-next/SKILL.md",
+      "computedHash": "ab94d96f3bbcab3ef5ec0ee80b1a253174ce149cff3b98043b3b83a24dfa927f"
     },
     "sandbox-stable": {
       "source": "cloudflare/skills",
