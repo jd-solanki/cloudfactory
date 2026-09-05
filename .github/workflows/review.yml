@@ -7,7 +7,7 @@
 #       types: [labeled]
 #   jobs:
 #     review:
-#       uses: jd-solanki/cloudfactory/.github/workflows/review.yml@v1
+#       uses: jd-solanki/cloudfactory/.github/workflows/review.yml@main
 #       secrets: inherit
 #
 # This workflow forwards repository coordinates only. It never checks out
@@ -85,16 +85,44 @@ jobs:
             exit 0
           fi
 
-          # The API does not publish a stable code for a duplicate id, so ask
-          # whether the instance exists rather than matching on an error code.
-          existing=$(curl -sS -o /dev/null -w '%{http_code}' "${base}/${instance_id}" \
+          # The instance id is derived from the revision, so a redelivered event
+          # and a deliberate re-request look identical here. The API publishes no
+          # stable code for a duplicate id either. Ask what the instance is doing
+          # instead, and let its state decide.
+          existing=$(curl -sS -o instance.json -w '%{http_code}' "${base}/${instance_id}" \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
 
-          if [ "$existing" -ge 200 ] && [ "$existing" -lt 300 ]; then
-            echo "Workflow instance ${instance_id} already exists. Nothing to do."
-            exit 0
+          if [ "$existing" -lt 200 ] || [ "$existing" -ge 300 ]; then
+            echo "Cloudflare rejected the request with HTTP ${status}." >&2
+            jq -r '.errors // .' create.json >&2
+            exit 1
           fi
 
-          echo "Cloudflare rejected the request with HTTP ${status}." >&2
-          jq -r '.errors // .' create.json >&2
-          exit 1
+          state=$(jq -r '.result.status // "unknown"' instance.json)
+
+          case "$state" in
+            errored | terminated | complete)
+              # A finished Run for this revision. Somebody is asking again, so
+              # start it over rather than refusing.
+              restart=$(curl -sS -o restart.json -w '%{http_code}' -X PATCH \
+                "${base}/${instance_id}/status" \
+                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{"status": "restart"}')
+
+              if [ "$restart" -ge 200 ] && [ "$restart" -lt 300 ]; then
+                echo "Restarted Workflow instance ${instance_id}, which was ${state}."
+                exit 0
+              fi
+
+              echo "Could not restart ${instance_id}: HTTP ${restart}." >&2
+              jq -r '.errors // .' restart.json >&2
+              exit 1
+              ;;
+            *)
+              # Still queued, running, waiting or paused. A redelivered event
+              # must not disturb a Run that is already in flight.
+              echo "Workflow instance ${instance_id} is ${state}. Nothing to do."
+              exit 0
+              ;;
+          esac

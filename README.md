@@ -217,7 +217,7 @@ or straight away if you do not control this repository. Pass `--ref` to choose:
 
 ```bash
 ./scripts/enable-repo.sh --token cf_xxx --account 1a2b3c \
-  --ref jd-solanki/cloudfactory@v1 octocorp/app
+  --ref jd-solanki/cloudfactory@99255d9 octocorp/app
 ```
 
 Now open a pull request and apply the `agent:review` label. The label flips to
@@ -275,10 +275,43 @@ second Secrets Store. Pull the latest and run `tofu apply` again.
 pinned to an old version of the reusable workflow. Move the `uses:` line to
 `@main`.
 
-**A code change did not take effect** — the reusable workflow ref only controls
-the GitHub Action. Worker or `packages/core` changes need
-`wrangler deploy` again. The container image is rebuilt only when the
-Dockerfile changes.
+**A code change did not take effect** — see [Updating](#updating). The reusable
+workflow ref only controls the GitHub Action; the Worker needs
+`wrangler deploy`.
+
+**`Workflow instance ... already exists. Nothing to do.`** — the run for that
+commit is still in flight. Wait for it. A finished run is restarted
+automatically when you re-apply the label.
+
+## Updating
+
+Two halves of this system update in different ways, and forgetting the second
+half is the usual reason a change seems to do nothing.
+
+**The GitHub Action updates itself.** Repositories call the reusable workflow at
+`@main`, so a push to this repository reaches every repository on the next label.
+Nothing to run.
+
+**The Worker does not.** It only changes when you deploy it:
+
+```bash
+pnpm -C apps/review-worker exec wrangler deploy
+```
+
+Run that after any change under:
+
+| Path                                | Why                                      |
+| ----------------------------------- | ---------------------------------------- |
+| `apps/review-worker/`               | the Worker and the Workflow itself       |
+| `packages/core/`                    | bundled into the Worker                  |
+| `apps/review-worker/wrangler.jsonc` | bindings, container settings, migrations |
+| `apps/review-worker/Dockerfile`     | the sandbox image                        |
+
+Skip it for changes to `.github/workflows/review.yml`, `infra/`, `scripts/`, or
+documentation. None of those are part of the Worker.
+
+Only a `Dockerfile` change rebuilds and pushes the container image. Every other
+deploy reuses the image you already have, so it finishes in seconds.
 
 ## Many projects
 
