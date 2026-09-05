@@ -5,7 +5,6 @@ import {
   REVIEW_INSTRUCTIONS_PATH,
   type ReviewRequest,
   WORKSPACE_PATH,
-  sandboxRunId,
 } from "core";
 import { Effect } from "effect";
 import { runWithGitHub } from "./github-runtime.ts";
@@ -15,7 +14,13 @@ import { MODEL_HOST } from "./sandbox.ts";
 const ARCHIVE_PATH = "/tmp/head.tar.gz";
 const DIFF_PATH = "/tmp/pull-request.diff";
 const INSTRUCTIONS_PATH = "/tmp/review-instructions.md";
+const PROMPT_PATH = "/tmp/review-prompt.txt";
 const OUTPUT_PATH = "/tmp/review.md";
+
+/** The agent writes these, and they are how a later step learns what happened. */
+const AGENT_STDOUT = "/tmp/codex.out";
+const AGENT_STDERR = "/tmp/codex.err";
+const AGENT_EXIT = "/tmp/codex.exit";
 
 /**
  * Codex writes session state and helper binaries here. It refuses to place
@@ -26,10 +31,8 @@ const CODEX_HOME = "/var/lib/codex";
 /** Sandbox installs its interception certificate at this fixed path. */
 const CA_CERTIFICATE_PATH = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
-const PROMPT_PATH = "/tmp/review-prompt.txt";
-
 const EXTRACT_TIMEOUT_MS = 120_000;
-const REVIEW_TIMEOUT_MS = 600_000;
+const SHORT_COMMAND_TIMEOUT_MS = 30_000;
 
 /**
  * The agent sends no credential. The Worker attaches one to every request that
@@ -41,7 +44,7 @@ const CODEX_CONFIG = `model_provider = "cloudflare-proxy"
 name = "cloudflare-proxy"
 base_url = "https://${MODEL_HOST}/v1"
 wire_api = "responses"
-# The Workflow step already retries, so the agent gives up quickly instead of
+# The Workflow already retries, so the agent gives up quickly instead of
 # spending a step timeout reconnecting to a request that cannot succeed.
 request_max_retries = 2
 stream_max_retries = 2
@@ -68,21 +71,43 @@ export type ReviewOutcome = {
   readonly body: string;
 };
 
-const shell = (script: string) => ["/bin/bash", "-lc", script];
+/** Whether the agent has finished, and with what. */
+export type ReviewProgress =
+  | { readonly finished: false }
+  | {
+      readonly finished: true;
+      readonly exitCode: number;
+    };
+
+const shell = (script: string) => ["/bin/bash", "-lc", script] as [string, ...string[]];
+
+const openSandbox = (env: Env, sandboxId: string) => getSandbox(env.SANDBOX, sandboxId);
+
+const run = (
+  sandbox: ReturnType<typeof openSandbox>,
+  script: string,
+  timeout = SHORT_COMMAND_TIMEOUT_MS,
+) =>
+  sandbox
+    .exec(shell(script), {
+      cwd: WORKSPACE_PATH,
+      env: { CODEX_HOME, CODEX_CA_CERTIFICATE: CA_CERTIFICATE_PATH },
+      timeout,
+    })
+    .then((process) => process.output({ encoding: "utf8" }));
 
 /**
- * Check out the exact head revision in a fresh Sandbox, review it, and report
- * the result.
+ * Check the revision out and start the agent, without waiting for it.
  *
- * A Sandbox is not durable state, so one pass does the whole job and destroys
- * the container afterwards. A retry repeats the fetch, which is deterministic
- * for a fixed SHA.
+ * A Workflow step cannot hold a container connection open for the length of a
+ * review, so this step returns as soon as the agent is running. The agent
+ * redirects its own output to files, which later steps read.
  */
-export const runReview = async (
+export const prepareReview = async (
   env: Env,
   request: ReviewRequest,
-  attempt: number,
-): Promise<ReviewOutcome> => {
+  sandboxId: string,
+): Promise<{ readonly fileCount: number }> => {
   const [archive, diff] = await runWithGitHub(
     env,
     Effect.flatMap(GitHub, (github) =>
@@ -93,112 +118,111 @@ export const runReview = async (
     ),
   );
 
-  const sandbox = getSandbox(env.SANDBOX, sandboxRunId(request, attempt));
+  const sandbox = openSandbox(env, sandboxId);
 
-  const run = async (command: ReadonlyArray<string>, timeout?: number) => {
-    const started = await sandbox.exec(command as [string, ...string[]], {
-      cwd: WORKSPACE_PATH,
-      env: { CODEX_HOME, CODEX_CA_CERTIFICATE: CA_CERTIFICATE_PATH },
-      ...(timeout === undefined ? {} : { timeout }),
-    });
-    return started.output({ encoding: "utf8" });
-  };
+  await sandbox.mkdir(WORKSPACE_PATH, { recursive: true });
+  await sandbox.mkdir(CODEX_HOME, { recursive: true });
+  await sandbox.writeFile(ARCHIVE_PATH, archive);
 
-  /**
-   * Same as `run`, but the output reaches Workers Logs afterwards.
-   *
-   * Streaming the output line by line was tried first and burned the step's
-   * CPU budget, which is 30 seconds by default and five minutes at most. A
-   * step that only awaits the process spends no CPU while it waits.
-   */
-  const runLogged = async (command: ReadonlyArray<string>, name: string, timeout: number) => {
-    const started = await sandbox.exec(command as [string, ...string[]], {
-      cwd: WORKSPACE_PATH,
-      env: { CODEX_HOME, CODEX_CA_CERTIFICATE: CA_CERTIFICATE_PATH },
-      timeout,
-    });
-    const output = await started.output({ encoding: "utf8" });
-    logProcessOutput(name, output);
-    return { stdout: output.stdout, stderr: output.stderr, exitCode: output.exitCode };
-  };
+  // GitHub wraps the tree in one directory named after the repository and
+  // commit, so drop that level.
+  const extracted = await run(
+    sandbox,
+    `tar -xzf ${ARCHIVE_PATH} -C ${WORKSPACE_PATH} --strip-components=1 && rm -f ${ARCHIVE_PATH}`,
+    EXTRACT_TIMEOUT_MS,
+  );
+  if (extracted.exitCode !== 0) {
+    throw new Error(`could not extract the head revision: ${extracted.stderr}`);
+  }
+
+  // A repository owns its own review rules. Absent rules fall back to ours.
+  const own = await run(sandbox, `cat ${WORKSPACE_PATH}/${REVIEW_INSTRUCTIONS_PATH}`);
+  const ownInstructions = own.exitCode === 0 && own.stdout.trim() !== "";
+
+  await sandbox.writeFile(DIFF_PATH, diff);
+  await sandbox.writeFile(
+    INSTRUCTIONS_PATH,
+    ownInstructions ? own.stdout : DEFAULT_REVIEW_INSTRUCTIONS,
+  );
+  await sandbox.writeFile(PROMPT_PATH, REVIEW_PROMPT);
+  await sandbox.writeFile(`${CODEX_HOME}/config.toml`, CODEX_CONFIG);
+
+  const counted = await run(sandbox, `find ${WORKSPACE_PATH} -type f | wc -l`);
+
+  // The container is already the isolation boundary: no credential, one
+  // reachable host, destroyed at the end. Codex's own nested sandbox needs user
+  // namespaces that are not available here, so it is turned off.
+  //
+  // stdin comes from /dev/null because a sandbox process has no stdin at all,
+  // and codex reads it for extra prompt text. The exit file is written last, so
+  // its presence is what marks the agent finished.
+  await sandbox.exec(
+    shell(
+      `rm -f ${AGENT_EXIT}; ` +
+        `codex exec --ephemeral --skip-git-repo-check` +
+        ` --dangerously-bypass-approvals-and-sandbox` +
+        ` --output-last-message ${OUTPUT_PATH} "$(cat ${PROMPT_PATH})"` +
+        ` < /dev/null > ${AGENT_STDOUT} 2> ${AGENT_STDERR}; ` +
+        `echo $? > ${AGENT_EXIT}`,
+    ),
+    { cwd: WORKSPACE_PATH, env: { CODEX_HOME, CODEX_CA_CERTIFICATE: CA_CERTIFICATE_PATH } },
+  );
+
+  const fileCount = Number.parseInt(counted.stdout.trim(), 10);
+  log("review.started", { headSha: request.headSha, fileCount });
+  return { fileCount };
+};
+
+/** Ask whether the agent has written its exit file yet. */
+export const checkReview = async (env: Env, sandboxId: string): Promise<ReviewProgress> => {
+  const exit = await run(openSandbox(env, sandboxId), `cat ${AGENT_EXIT} 2>/dev/null || true`);
+  const code = Number.parseInt(exit.stdout.trim(), 10);
+
+  if (!Number.isInteger(code)) return { finished: false };
+
+  log("review.finished", { exitCode: code });
+  return { finished: true, exitCode: code };
+};
+
+/** Read what the agent produced, then take the container down. */
+export const collectReview = async (
+  env: Env,
+  request: ReviewRequest,
+  sandboxId: string,
+  fileCount: number,
+): Promise<ReviewOutcome> => {
+  const sandbox = openSandbox(env, sandboxId);
 
   try {
-    await sandbox.mkdir(WORKSPACE_PATH, { recursive: true });
-    await sandbox.mkdir(CODEX_HOME, { recursive: true });
-    await sandbox.writeFile(ARCHIVE_PATH, archive);
+    const [exit, out, err, body] = await Promise.all([
+      run(sandbox, `cat ${AGENT_EXIT} 2>/dev/null || true`),
+      run(sandbox, `tail -c 20000 ${AGENT_STDOUT} 2>/dev/null || true`),
+      run(sandbox, `tail -c 20000 ${AGENT_STDERR} 2>/dev/null || true`),
+      run(sandbox, `cat ${OUTPUT_PATH} 2>/dev/null || true`),
+    ]);
 
-    // GitHub wraps the tree in one directory named after the repository and
-    // commit, so drop that level.
-    const extracted = await run(
-      shell(
-        `tar -xzf ${ARCHIVE_PATH} -C ${WORKSPACE_PATH} --strip-components=1 && rm -f ${ARCHIVE_PATH}`,
-      ),
-      EXTRACT_TIMEOUT_MS,
-    );
-    if (extracted.exitCode !== 0) {
-      throw new Error(`could not extract the head revision: ${extracted.stderr}`);
-    }
-    log("checkout.extracted", { headSha: request.headSha });
+    const exitCode = Number.parseInt(exit.stdout.trim(), 10);
+    logProcessOutput("codex", { stdout: out.stdout, stderr: err.stdout, exitCode });
 
-    // A repository owns its own review rules. Absent rules fall back to ours.
-    const own = await run(shell(`cat ${WORKSPACE_PATH}/${REVIEW_INSTRUCTIONS_PATH}`));
-    const ownInstructions = own.exitCode === 0 && own.stdout.trim() !== "";
-    const instructions = ownInstructions ? own.stdout : DEFAULT_REVIEW_INSTRUCTIONS;
-    log("checkout.instructions", {
-      source: ownInstructions ? REVIEW_INSTRUCTIONS_PATH : "default",
-    });
-
-    await sandbox.writeFile(DIFF_PATH, diff);
-    await sandbox.writeFile(INSTRUCTIONS_PATH, instructions);
-    await sandbox.writeFile(`${CODEX_HOME}/config.toml`, CODEX_CONFIG);
-
-    // The container is already the isolation boundary: no credential, one
-    // reachable host, destroyed at the end. Codex's own nested sandbox needs
-    // user namespaces that are not available here, so it is turned off.
-    //
-    // stdin is redirected from /dev/null because a sandbox process has no stdin
-    // at all, and codex reads it for extra prompt text. Without an immediate
-    // end of file it waits for input that can never arrive.
-    await sandbox.writeFile(PROMPT_PATH, REVIEW_PROMPT);
-    log("review.started", { headSha: request.headSha, attempt });
-
-    const review = await runLogged(
-      [
-        "/bin/bash",
-        "-lc",
-        `codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox` +
-          ` --output-last-message ${OUTPUT_PATH} "$(cat ${PROMPT_PATH})" < /dev/null`,
-      ],
-      "codex",
-      REVIEW_TIMEOUT_MS,
-    );
-
-    log("review.finished", { exitCode: review.exitCode, stdoutBytes: review.stdout.length });
-
-    if (review.exitCode !== 0) {
-      // Codex reports transport failures on stdout and its banner on stderr,
-      // so an error built from stderr alone says nothing about what went wrong.
+    if (exitCode !== 0) {
       throw new Error(
-        `the reviewing agent exited ${review.exitCode}.` +
-          ` stdout: ${review.stdout.slice(-1500)}` +
-          ` stderr: ${review.stderr.slice(-1500)}`,
+        `the reviewing agent exited ${exitCode}.` +
+          ` stdout: ${out.stdout.slice(-1500)} stderr: ${err.stdout.slice(-1500)}`,
       );
     }
-
-    const body = await run(shell(`cat ${OUTPUT_PATH}`));
-    if (body.exitCode !== 0 || body.stdout.trim() === "") {
+    if (body.stdout.trim() === "") {
       throw new Error("the reviewing agent produced no review");
     }
 
-    const counted = await run(shell(`find ${WORKSPACE_PATH} -type f | wc -l`));
-
-    return {
-      headSha: request.headSha,
-      fileCount: Number.parseInt(counted.stdout.trim(), 10),
-      body: body.stdout.trim(),
-    };
+    return { headSha: request.headSha, fileCount, body: body.stdout.trim() };
   } finally {
     await sandbox.destroy();
-    log("sandbox.destroyed", { headSha: request.headSha, attempt });
+    log("sandbox.destroyed", { sandboxId });
   }
+};
+
+/** Take the container down when a Run gives up before collecting. */
+export const abandonSandbox = async (env: Env, sandboxId: string): Promise<void> => {
+  await openSandbox(env, sandboxId).destroy();
+  log("sandbox.destroyed", { sandboxId, abandoned: true });
 };
