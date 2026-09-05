@@ -176,7 +176,13 @@ export const runReview = async (
     log("review.finished", { exitCode: review.exitCode, stdoutBytes: review.stdout.length });
 
     if (review.exitCode !== 0) {
-      throw new Error(`the reviewing agent failed: ${review.stderr.slice(-2000)}`);
+      // Codex reports transport failures on stdout and its banner on stderr,
+      // so an error built from stderr alone says nothing about what went wrong.
+      throw new Error(
+        `the reviewing agent exited ${review.exitCode}.` +
+          ` stdout: ${review.stdout.slice(-1500)}` +
+          ` stderr: ${review.stderr.slice(-1500)}`,
+      );
     }
 
     const body = await run(shell(`cat ${OUTPUT_PATH}`));
