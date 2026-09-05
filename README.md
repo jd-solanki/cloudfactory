@@ -7,20 +7,56 @@ result as one comment.
 You run it in your own Cloudflare account. This project operates no service and
 holds none of your credentials or code.
 
-## How a review starts
+## How a review runs
 
-A maintainer applies the `agent:review` label to a pull request. Applying a
-label needs write access, so only trusted people can start a Run.
+A maintainer applies the `agent:review` label. Applying a label needs write
+access, so only trusted people can start a Run.
 
-```text
-label applied
-  -> GitHub Actions forwards the repository, pull request, and head SHA
-     -> Cloudflare Workflow
-        -> sandbox: check out the head SHA, review it, publish the comment
+```mermaid
+sequenceDiagram
+    actor M as Maintainer
+    participant GH as GitHub
+    participant AC as GitHub Actions
+    participant WF as Cloudflare Workflow
+    participant WK as Worker
+    participant SB as Sandbox
+    participant AI as OpenAI
+
+    M->>GH: apply label agent:review
+    GH->>AC: pull_request_target, type labeled
+    AC->>WF: create instance with owner, repo, pullNumber, headSha
+    AC-->>GH: job ends, nothing checked out
+
+    Note over WF,WK: step 1 of 4, claim
+    WK->>GH: add agent:reviewing, remove agent:review
+
+    Note over WF,SB: step 2 of 4, review
+    WK->>GH: repository archive at headSha, pull request diff
+    WK->>SB: stream archive in, no credential
+    SB->>SB: extract, read .code-factory/review.md
+    SB->>WK: model request with no Authorization header
+    WK->>AI: same request, Authorization attached outside the container
+    AI-->>SB: review
+    SB-->>WK: review text
+    WK->>SB: destroy sandbox
+
+    Note over WF,WK: step 3 of 4, publish
+    WK->>GH: create or update the review comment
+
+    Note over WF,WK: step 4 of 4, finish
+    WK->>GH: remove agent:reviewing
 ```
 
-GitHub Actions never checks out pull-request code. It forwards four fields and
-exits.
+Three things that diagram is drawn to show.
+
+GitHub Actions forwards four fields and exits. It never checks out pull-request
+code, so `pull_request_target` exposes no secret to a fork.
+
+The sandbox never talks to GitHub. The Worker fetches the archive and streams it
+in, so no GitHub credential exists inside the container.
+
+The model credential is attached after the request leaves the container. The
+agent is configured to send none, and the container can reach exactly one host.
 
 ## Prerequisites
 
@@ -170,6 +206,20 @@ A token on the command line is visible to other processes and lands in your shel
 history. Use a throwaway token, or prefix the command with a space where your
 shell skips those.
 
+### Which version your repositories follow
+
+`uses:` takes a branch, a release tag, or a commit SHA. There is no `@latest`
+keyword.
+
+The default is `@main`, so your repositories pick up fixes as soon as they land
+and no tag has to be moved. Pin to a tag or a SHA once the capability settles,
+or straight away if you do not control this repository. Pass `--ref` to choose:
+
+```bash
+./scripts/enable-repo.sh --token cf_xxx --account 1a2b3c \
+  --ref jd-solanki/cloudfactory@v1 octocorp/app
+```
+
 Now open a pull request and apply the `agent:review` label. The label flips to
 `agent:reviewing` within a few seconds, and the review arrives as a comment.
 
@@ -184,7 +234,7 @@ on:
 
 jobs:
   review:
-    uses: jd-solanki/cloudfactory/.github/workflows/review.yml@v1
+    uses: jd-solanki/cloudfactory/.github/workflows/review.yml@main
     secrets: inherit
 ```
 
@@ -198,6 +248,20 @@ jobs:
 
 No label after a review means it finished. The comment carries the outcome.
 
+```mermaid
+stateDiagram-v2
+    state "agent:reviewing" as reviewing
+    state "agent:failed" as failed
+
+    [*] --> reviewing: maintainer applies agent:review
+    reviewing --> [*]: review published, label removed
+    reviewing --> failed: Run could not finish
+    failed --> reviewing: agent:review applied again
+```
+
+A pull request carries at most one `agent:*` label, and every label this
+capability does not own is left alone.
+
 ## Troubleshooting
 
 **`terraform: command not found`** — you have OpenTofu. Use `tofu`.
@@ -208,8 +272,13 @@ second Secrets Store. Pull the latest and run `tofu apply` again.
 **`wrangler deploy` fails on the container build** — Docker is not running.
 
 **The Workflow errors with `payload is not an object`** — your repository is
-pinned to a version of the reusable workflow that sent the payload as a string.
-Move to `@v1` or later.
+pinned to an old version of the reusable workflow. Move the `uses:` line to
+`@main`.
+
+**A code change did not take effect** — the reusable workflow ref only controls
+the GitHub Action. Worker or `packages/core` changes need
+`wrangler deploy` again. The container image is rebuilt only when the
+Dockerfile changes.
 
 ## Many projects
 

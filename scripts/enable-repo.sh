@@ -13,7 +13,7 @@ agent:reviewing|FBCA04|A Run is reviewing this pull request
 agent:failed|B60205|A Run failed. Apply agent:review to try again"
 readonly REQUEST_LABEL="agent:review"
 readonly WORKFLOW_PATH=".github/workflows/agent-review.yml"
-readonly DEFAULT_REF="jd-solanki/cloudfactory@v1"
+readonly DEFAULT_REF="jd-solanki/cloudfactory@main"
 
 usage() {
   cat <<USAGE

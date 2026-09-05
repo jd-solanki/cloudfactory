@@ -7,5 +7,5 @@ on:
 
 jobs:
   review:
-    uses: jd-solanki/cloudfactory/.github/workflows/review.yml@v1
+    uses: jd-solanki/cloudfactory/.github/workflows/review.yml@main
     secrets: inherit
