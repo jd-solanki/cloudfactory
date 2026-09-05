@@ -74,13 +74,19 @@ export type ReviewOutcome = {
   readonly body: string;
 };
 
-/** Whether the agent has finished, and with what. */
-export type ReviewProgress =
-  | { readonly finished: false }
-  | {
-      readonly finished: true;
-      readonly exitCode: number;
-    };
+/**
+ * Whether the agent has finished, and how much it has written so far.
+ *
+ * A step's return value always survives into the dashboard, so the byte counts
+ * ride along: without them a stalled agent and a working one look identical.
+ */
+export type ReviewProgress = {
+  readonly finished: boolean;
+  readonly exitCode?: number;
+  readonly stdoutBytes: number;
+  readonly stderrBytes: number;
+  readonly reviewBytes: number;
+};
 
 const shell = (script: string) => ["/bin/bash", "-lc", script] as [string, ...string[]];
 
@@ -176,15 +182,32 @@ export const prepareReview = async (
   return { fileCount };
 };
 
-/** Ask whether the agent has written its exit file yet. */
+/** Ask whether the agent has finished, and how far it has got. */
 export const checkReview = async (env: Env, sandboxId: string): Promise<ReviewProgress> => {
-  const exit = await run(openSandbox(env, sandboxId), `cat ${AGENT_EXIT} 2>/dev/null || true`);
-  const code = Number.parseInt(exit.stdout.trim(), 10);
+  const probe = await run(
+    openSandbox(env, sandboxId),
+    "printf '%s|%s|%s|%s' " +
+      `"$(cat ${AGENT_EXIT} 2>/dev/null)" ` +
+      `"$(wc -c < ${AGENT_STDOUT} 2>/dev/null || echo 0)" ` +
+      `"$(wc -c < ${AGENT_STDERR} 2>/dev/null || echo 0)" ` +
+      `"$(wc -c < ${OUTPUT_PATH} 2>/dev/null || echo 0)"`,
+  );
 
-  if (!Number.isInteger(code)) return { finished: false };
+  const [exit = "", out = "0", err = "0", review = "0"] = probe.stdout.trim().split("|");
+  const size = (value: string) => Number.parseInt(value.trim(), 10) || 0;
+  const code = Number.parseInt(exit.trim(), 10);
+  const finished = Number.isInteger(code);
 
-  log("review.finished", { exitCode: code });
-  return { finished: true, exitCode: code };
+  const progress: ReviewProgress = {
+    finished,
+    ...(finished ? { exitCode: code } : {}),
+    stdoutBytes: size(out),
+    stderrBytes: size(err),
+    reviewBytes: size(review),
+  };
+
+  if (finished) log("review.finished", progress);
+  return progress;
 };
 
 /** Read what the agent produced, then take the container down. */
