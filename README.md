@@ -24,27 +24,82 @@ exits.
 
 ## Prerequisites
 
-| Tool                  | Needed for | Notes                                                            |
-| --------------------- | ---------- | ---------------------------------------------------------------- |
-| OpenTofu or Terraform | step 1     | Commands below say `tofu`. `terraform` takes the same arguments. |
-| Node and pnpm         | step 2     | Versions are pinned in [`package.json`](package.json).           |
-| Docker, running       | step 2     | `wrangler deploy` builds the sandbox image with it.              |
-| GitHub CLI            | step 3     | Only `scripts/enable-repo.sh` uses it.                           |
+Install these before you start:
 
-You also need three accounts or credentials:
+| Tool                  | Needed for | Notes                                                      |
+| --------------------- | ---------- | ---------------------------------------------------------- |
+| OpenTofu or Terraform | step 2     | Commands say `tofu`. `terraform` takes the same arguments. |
+| Node and pnpm         | step 3     | Versions are pinned in [`package.json`](package.json).     |
+| Docker, running       | step 3     | `wrangler deploy` builds the sandbox image with it.        |
+| GitHub CLI            | step 4     | Only `scripts/enable-repo.sh` uses it.                     |
 
-- A Cloudflare account with Workers and Containers enabled. Containers is a paid
-  product, and every review runs one.
-- An OpenAI API key.
-- A GitHub fine-grained token with `Pull requests: Read and write` on each
-  repository you want reviewed.
+You also need a Cloudflare **Workers Paid** plan. Containers require it, and every
+review runs one. There is no separate toggle to switch Containers on. The plan is
+$5 per month and includes a monthly allotment of memory, CPU, disk, and egress;
+past that you pay per second. See
+[Containers pricing](https://developers.cloudflare.com/containers/pricing/).
 
-## Install
+## 1. Collect four values
 
-### 1. Create the secrets
+Keep these somewhere you can paste from. Steps 2 to 4 ask for all of them.
 
-The Terraform module in [`infra/`](infra/) creates a Cloudflare Secrets Store
-and puts both credentials in it.
+### Cloudflare account id
+
+Open <https://dash.cloudflare.com>, press `Cmd/Ctrl + K`, type `Copy account ID`,
+and select the result.
+
+Already have Wrangler working? `pnpm dlx wrangler whoami` prints it too.
+
+### Cloudflare API token, for Terraform
+
+<https://dash.cloudflare.com/profile/api-tokens> → **Create Token** → **Custom
+token** → **Get started**. No template covers Secrets Store.
+
+Under **Permissions** add two rows, both with the first dropdown set to
+**Account**:
+
+| Resource      | Access |
+| ------------- | ------ |
+| Secrets Store | Read   |
+| Secrets Store | Edit   |
+
+`Edit` is Cloudflare's name for write. Set **Account Resources** to your account,
+then **Continue to summary** → **Create Token**. Copy it now; the dashboard shows
+it once.
+
+### Cloudflare API token, for GitHub Actions
+
+Create a second token the same way. This one only starts Workflow runs, so give
+it less:
+
+| Resource        | Access |
+| --------------- | ------ |
+| Workers Scripts | Edit   |
+
+There is no dropdown entry called `Workers Scripts: Write`. The resource is
+**Workers Scripts** and the write level is **Edit**. The **Edit Cloudflare
+Workers** template also works.
+
+### GitHub token
+
+<https://github.com/settings/personal-access-tokens/new>
+
+- **Repository access** → **Only select repositories** → pick every repository you
+  want reviewed.
+- **Permissions** → **Repository permissions** → **Pull requests** → **Read and
+  write**. GitHub adds **Metadata: Read-only** for you.
+- **Expiration** goes up to 366 days, or no expiry.
+
+### OpenAI API key
+
+<https://platform.openai.com/api-keys>. A platform key, not a ChatGPT
+subscription. [`docs/research/codex-cli-authentication.md`](docs/research/codex-cli-authentication.md)
+explains why a subscription cannot work here.
+
+## 2. Create the secrets
+
+The Terraform module in [`infra/`](infra/) puts your GitHub token and model key
+into Cloudflare Secrets Store.
 
 ```bash
 cd infra
@@ -52,62 +107,74 @@ tofu init
 tofu apply
 ```
 
-OpenTofu asks for each value it needs, so nothing lands on disk or in your
-shell history:
+OpenTofu asks for each value, so nothing lands on disk or in your shell history:
 
-| Prompt           | Value                                                                |
-| ---------------- | -------------------------------------------------------------------- |
-| `api_token`      | Cloudflare token with `Secrets Store Read` and `Secrets Store Write` |
-| `account_id`     | The Cloudflare account to deploy into                                |
-| `github_token`   | Fine-grained token with `Pull requests: Read and write`              |
-| `openai_api_key` | Your model credential                                                |
+| Prompt           | Paste                           |
+| ---------------- | ------------------------------- |
+| `api_token`      | the Terraform token from step 1 |
+| `account_id`     | your account id                 |
+| `github_token`   | the GitHub token                |
+| `openai_api_key` | your OpenAI key                 |
 
-To stop retyping them, put the same names in `infra/terraform.tfvars`. Both
-tools read that file, and it is gitignored. [`infra/variables.tf`](infra/variables.tf) describes each one.
+To stop retyping them, put the same names in `infra/terraform.tfvars`. Both tools
+read that file, and it is gitignored.
 
-Keep the `secrets_store_id` output.
+Cloudflare allows one Secrets Store per account. The module reuses the store you
+already have and creates one only if you have none.
 
-### 2. Deploy the Worker
+Keep the `secrets_store_id` it prints.
+
+## 3. Deploy the Worker
 
 Terraform cannot deploy this Worker. The Cloudflare provider's `containers`
 attribute accepts only a Durable Object class name, so it can neither build nor
 push a container image. Wrangler does that step, and it owns nothing Terraform
 owns. See [ADR 0004](docs/adr/0004-terraform-provisioning.md).
 
-Put the `secrets_store_id` from step 1 into both `store_id` fields of
-`apps/review-worker/wrangler.jsonc`, then:
+Put the `secrets_store_id` from step 2 into **both** `store_id` fields of
+`apps/review-worker/wrangler.jsonc`.
+
+Start Docker, then:
 
 ```bash
 pnpm install
+pnpm -C apps/review-worker exec wrangler login
 pnpm -C apps/review-worker exec wrangler deploy
 ```
 
-This builds the container image, pushes it, and creates the Worker, the
-Workflow, and the Durable Object.
+`wrangler login` opens your browser and stores an OAuth token, which already
+carries every permission the deploy needs. The first deploy takes a few minutes
+because it builds and pushes the container image.
 
-### 3. Turn it on for a repository
+Prefer a token to the browser? Set `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` and skip `wrangler login`. That token needs **Workers
+Scripts: Edit** _and_ **Secrets Store: Edit**, because the Worker binds a secret
+and a read-only token fails at deploy time.
 
-Steps 1 and 2 happen once for your whole account. This step repeats for each
-repository you want reviewed.
+## 4. Turn it on for a repository
+
+Steps 1 to 3 happen once for your whole account. This step repeats per
+repository.
 
 ```bash
-# --token needs account-scoped Workers Scripts: Write.
-# --account is the account_id output from step 1.
 ./scripts/enable-repo.sh --token cf_xxx --account 1a2b3c octocorp/app
 ```
 
-The script creates the `agent:review` label, sets both repository secrets, and
-commits the workflow file. Running it again on the same repository is safe.
+`--token` is the **GitHub Actions** token from step 1, not the Terraform one.
 
-A token on the command line is visible to other processes and lands in your
-shell history. Use a throwaway token, or prefix the command with a space where
-your shell skips those.
+The script creates the `agent:review`, `agent:reviewing` and `agent:failed`
+labels, sets both repository secrets, and commits the workflow file. Running it
+again on the same repository is safe.
 
-Open a pull request, apply the `agent:review` label, and the review appears as a
-comment.
+A token on the command line is visible to other processes and lands in your shell
+history. Use a throwaway token, or prefix the command with a space where your
+shell skips those.
 
-To do it by hand instead: add those two secrets, create the label, and commit
-this file.
+Now open a pull request and apply the `agent:review` label. The label flips to
+`agent:reviewing` within a few seconds, and the review arrives as a comment.
+
+To set it up by hand instead: create those three labels, add the two secrets, and
+commit this file.
 
 ```yaml
 # .github/workflows/agent-review.yml
@@ -121,10 +188,33 @@ jobs:
     secrets: inherit
 ```
 
+## Labels
+
+| Label             | Meaning                                                      |
+| ----------------- | ------------------------------------------------------------ |
+| `agent:review`    | You are asking for a review. A Run consumes this label.      |
+| `agent:reviewing` | A Run owns this pull request right now.                      |
+| `agent:failed`    | The Run could not finish. Apply `agent:review` to try again. |
+
+No label after a review means it finished. The comment carries the outcome.
+
+## Troubleshooting
+
+**`terraform: command not found`** — you have OpenTofu. Use `tofu`.
+
+**`maximum_stores_exceeded`** — an old version of the module tried to create a
+second Secrets Store. Pull the latest and run `tofu apply` again.
+
+**`wrangler deploy` fails on the container build** — Docker is not running.
+
+**The Workflow errors with `payload is not an object`** — your repository is
+pinned to a version of the reusable workflow that sent the payload as a string.
+Move to `@v1` or later.
+
 ## Many projects
 
 One deployment serves every repository. Nothing in the Worker is tied to a
-single project, so steps 1 and 2 never repeat.
+single project, so steps 1 to 3 never repeat.
 
 ```bash
 ./scripts/enable-repo.sh --token cf_xxx --account 1a2b3c \
@@ -133,8 +223,8 @@ single project, so steps 1 and 2 never repeat.
 
 ### The GitHub token must cover all of them
 
-It is one fine-grained token, set in step 1. Select every repository you want
-reviewed, and only those.
+It is one fine-grained token, given to Terraform in step 2. Select every
+repository you want reviewed, and only those.
 
 ### Secrets can live at the organization level
 
@@ -146,18 +236,6 @@ nothing to set per repository.
 
 `max_instances` in `apps/review-worker/wrangler.jsonc` caps concurrent
 containers across every project. The sixth review waits for a free slot.
-
-## API tokens
-
-You need two Cloudflare tokens, with different permissions.
-
-| Used by                   | Permissions                                 |
-| ------------------------- | ------------------------------------------- |
-| Terraform, in step 1      | `Secrets Store Read`, `Secrets Store Write` |
-| GitHub Actions, in step 3 | `Workers Scripts: Write`                    |
-
-The GitHub token in step 1 needs `Pull requests: Read and write` on every
-repository under review.
 
 ## Configure the review
 
