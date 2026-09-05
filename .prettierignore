@@ -1,0 +1,4 @@
+# Vendored agent skills. Their content is owned upstream and tracked in
+# skills-lock.json, so this repository does not reformat them.
+.agents/
+.claude/

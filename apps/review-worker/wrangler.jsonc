@@ -1,0 +1,47 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "cloudfactory-review-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-04",
+  "observability": { "enabled": true },
+
+  // "name" is the {workflow_name} path segment the GitHub Action posts to.
+  "workflows": [
+    {
+      "binding": "REVIEW_WORKFLOW",
+      "name": "review",
+      "class_name": "ReviewWorkflow",
+    },
+  ],
+
+  // The store and its secrets are created by the Terraform module in infra/.
+  // Replace "store_id" with that module's `secrets_store_id` output.
+  "secrets_store_secrets": [
+    {
+      "binding": "GITHUB_TOKEN",
+      "store_id": "REPLACE_WITH_SECRETS_STORE_ID",
+      "secret_name": "github-token",
+    },
+    {
+      "binding": "OPENAI_API_KEY",
+      "store_id": "REPLACE_WITH_SECRETS_STORE_ID",
+      "secret_name": "openai-api-key",
+    },
+  ],
+
+  "durable_objects": {
+    "bindings": [{ "name": "SANDBOX", "class_name": "Sandbox" }],
+  },
+
+  // The image line must match the @cloudflare/sandbox package line.
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "./Dockerfile",
+      "instance_type": "standard-1",
+      "max_instances": 5,
+    },
+  ],
+
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sandbox"] }],
+}

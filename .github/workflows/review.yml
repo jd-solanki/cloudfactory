@@ -1,0 +1,98 @@
+# Reusable workflow published to users of the Code Factory.
+#
+# A calling repository adds:
+#
+#   on:
+#     pull_request_target:
+#       types: [labeled]
+#   jobs:
+#     review:
+#       uses: jd-solanki/cloudfactory/.github/workflows/review.yml@v1
+#       secrets: inherit
+#
+# This workflow forwards repository coordinates only. It never checks out
+# pull-request code, so `pull_request_target` exposes no secret to a fork.
+name: Code Factory review
+
+on:
+  workflow_call:
+    inputs:
+      label:
+        description: Label that requests a review.
+        type: string
+        default: "agent:review"
+      workflow-name:
+        description: Name of the Cloudflare Workflow to start.
+        type: string
+        default: review
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        description: Cloudflare API token with account-scoped Workers Scripts Write.
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        description: Cloudflare account that hosts the review Worker.
+        required: true
+
+permissions: {}
+
+jobs:
+  start-review:
+    if: github.event.label.name == inputs.label
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Start the review Workflow
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WORKFLOW_NAME: ${{ inputs.workflow-name }}
+          OWNER: ${{ github.event.repository.owner.login }}
+          REPO: ${{ github.event.repository.name }}
+          PULL_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          base="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workflows/${WORKFLOW_NAME}/instances"
+
+          # A deterministic id makes a redelivered event a no-op instead of a
+          # second Run. The distinguishing parts lead, so the 100-character
+          # limit can only truncate the repository slug.
+          slug=$(printf '%s' "${OWNER}-${REPO}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+          instance_id="review-${HEAD_SHA:0:12}-${PULL_NUMBER}-${slug}"
+          instance_id="${instance_id:0:100}"
+
+          params=$(jq -nc \
+            --arg owner "$OWNER" \
+            --arg repo "$REPO" \
+            --argjson pullNumber "$PULL_NUMBER" \
+            --arg headSha "$HEAD_SHA" \
+            '{version: 1, owner: $owner, repo: $repo, pullNumber: $pullNumber, headSha: $headSha}')
+
+          # The Workflows API takes `params` as a JSON-encoded string.
+          body=$(jq -nc --arg id "$instance_id" --arg params "$params" \
+            '{instance_id: $id, params: $params}')
+
+          status=$(curl -sS -o create.json -w '%{http_code}' -X POST "$base" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$body")
+
+          if [ "$status" -ge 200 ] && [ "$status" -lt 300 ]; then
+            echo "Started Workflow instance ${instance_id}."
+            exit 0
+          fi
+
+          # The API does not publish a stable code for a duplicate id, so ask
+          # whether the instance exists rather than matching on an error code.
+          existing=$(curl -sS -o /dev/null -w '%{http_code}' "${base}/${instance_id}" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+
+          if [ "$existing" -ge 200 ] && [ "$existing" -lt 300 ]; then
+            echo "Workflow instance ${instance_id} already exists. Nothing to do."
+            exit 0
+          fi
+
+          echo "Cloudflare rejected the request with HTTP ${status}." >&2
+          jq -r '.errors // .' create.json >&2
+          exit 1
