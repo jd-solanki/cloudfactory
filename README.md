@@ -22,10 +22,24 @@ label applied
 GitHub Actions never checks out pull-request code. It forwards four fields and
 exits.
 
-## Install
+## Prerequisites
 
-You need a Cloudflare account with Workers and Containers enabled, Docker
-running locally, and an OpenAI API key.
+| Tool                  | Needed for | Notes                                                            |
+| --------------------- | ---------- | ---------------------------------------------------------------- |
+| OpenTofu or Terraform | step 1     | Commands below say `tofu`. `terraform` takes the same arguments. |
+| Node and pnpm         | step 2     | Versions are pinned in [`package.json`](package.json).           |
+| Docker, running       | step 2     | `wrangler deploy` builds the sandbox image with it.              |
+| GitHub CLI            | step 3     | Only `scripts/enable-repo.sh` uses it.                           |
+
+You also need three accounts or credentials:
+
+- A Cloudflare account with Workers and Containers enabled. Containers is a paid
+  product, and every review runs one.
+- An OpenAI API key.
+- A GitHub fine-grained token with `Pull requests: Read and write` on each
+  repository you want reviewed.
+
+## Install
 
 ### 1. Create the secrets
 
@@ -34,11 +48,11 @@ and puts both credentials in it.
 
 ```bash
 cd infra
-terraform init
-terraform apply
+tofu init
+tofu apply
 ```
 
-Terraform asks for each value it needs, so nothing lands on disk or in your
+OpenTofu asks for each value it needs, so nothing lands on disk or in your
 shell history:
 
 | Prompt           | Value                                                                |
@@ -48,8 +62,8 @@ shell history:
 | `github_token`   | Fine-grained token with `Pull requests: Read and write`              |
 | `openai_api_key` | Your model credential                                                |
 
-To stop retyping them, put the same names in `infra/terraform.tfvars`. That file
-is gitignored. [`infra/variables.tf`](infra/variables.tf) describes each one.
+To stop retyping them, put the same names in `infra/terraform.tfvars`. Both
+tools read that file, and it is gitignored. [`infra/variables.tf`](infra/variables.tf) describes each one.
 
 Keep the `secrets_store_id` output.
 
