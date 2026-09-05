@@ -279,9 +279,9 @@ pinned to an old version of the reusable workflow. Move the `uses:` line to
 workflow ref only controls the GitHub Action; the Worker needs
 `wrangler deploy`.
 
-**`Workflow instance ... already exists. Nothing to do.`** — the run for that
-commit is still in flight. Wait for it. A finished run is restarted
-automatically when you re-apply the label.
+**`Workflow instance ... already exists. Nothing to do.`** — this exact Actions
+run already started one and it is still in flight. Wait for it. Applying the
+label again always starts a new Run.
 
 ## Updating
 

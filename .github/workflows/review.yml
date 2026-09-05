@@ -50,16 +50,20 @@ jobs:
           REPO: ${{ github.event.repository.name }}
           PULL_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
 
           base="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workflows/${WORKFLOW_NAME}/instances"
 
-          # A deterministic id makes a redelivered event a no-op instead of a
-          # second Run. The distinguishing parts lead, so the 100-character
-          # limit can only truncate the repository slug.
+          # One instance per Actions run. Keying on the revision alone was wrong:
+          # a Workflow instance keeps the params it was created with, so an id
+          # that a second request can only restart replays the first request's
+          # payload forever. The run id makes every label application a new Run.
+          # The distinguishing parts lead, so the 100-character limit can only
+          # truncate the repository slug.
           slug=$(printf '%s' "${OWNER}-${REPO}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
-          instance_id="review-${HEAD_SHA:0:12}-${PULL_NUMBER}-${slug}"
+          instance_id="review-${HEAD_SHA:0:12}-${PULL_NUMBER}-${RUN_ID}-${slug}"
           instance_id="${instance_id:0:100}"
 
           params=$(jq -nc \
@@ -85,10 +89,10 @@ jobs:
             exit 0
           fi
 
-          # The instance id is derived from the revision, so a redelivered event
-          # and a deliberate re-request look identical here. The API publishes no
-          # stable code for a duplicate id either. Ask what the instance is doing
-          # instead, and let its state decide.
+          # Reaching here means this exact Actions run already created an
+          # instance, so its params match what we would send now. That happens
+          # when a job is re-run. The API publishes no stable code for a
+          # duplicate id, so ask what the instance is doing and let it decide.
           existing=$(curl -sS -o instance.json -w '%{http_code}' "${base}/${instance_id}" \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
 

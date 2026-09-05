@@ -99,7 +99,7 @@ Reviewing every pull request on open is not supported. A Run costs the user mone
 - “Nothing to fix” is a successful terminal result and never starts a fixer.
 - Automated fix and re-review cycles are bounded.
 - GitHub writes are idempotent and safe under event redelivery and Workflow retry. A review publishes one comment per pull request and updates it in place.
-- Workflow instance identities are deterministic, so a redelivered event never starts a second Run.
+- A Workflow instance keeps the parameters it was created with, so one instance identity belongs to one request. Repeating a request creates a new instance rather than restarting an old one with a stale payload.
 - Read-only stages cannot silently gain write authority.
 - Model and repository credentials live in the Cloudflare Secrets Store and are read by the Worker per Run. They never appear in Workflow inputs, Workflow results, model context, artifacts, logs, or the Sandbox.
 - The reviewing agent is configured with no credential of its own. The Worker attaches the model credential after a request leaves the container.
