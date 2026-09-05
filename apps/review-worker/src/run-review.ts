@@ -40,6 +40,7 @@ const SHORT_COMMAND_TIMEOUT_MS = 30_000;
 const codexConfig = (env: Env) =>
   [
     `model = "${env.MODEL_NAME}"`,
+    `model_reasoning_effort = "${env.MODEL_REASONING_EFFORT}"`,
     'model_provider = "review"',
     "",
     "[model_providers.review]",

@@ -117,6 +117,10 @@ export class ReviewWorkflow extends WorkflowEntrypoint<Env, ReviewRequest> {
       });
       // Retries are already exhausted here, so the pull request must not be
       // left claiming that a review is still running.
+      await step.do("abandon-sandbox-on-failure", STEP_RETRIES, async () => {
+        await abandonSandbox(this.env, sandboxId);
+        return { sandboxId };
+      });
       await step.do("mark-run-failed", STEP_RETRIES, async () => {
         await runWithGitHub(this.env, setReviewState(request, "failed"));
         return { state: "failed" };

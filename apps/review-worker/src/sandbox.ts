@@ -1,4 +1,5 @@
 import { ContainerProxy, Sandbox as BaseSandbox } from "@cloudflare/sandbox";
+import { log } from "./logging.ts";
 
 // Outbound interception needs this class deployed alongside the Sandbox.
 export { ContainerProxy };
@@ -30,7 +31,28 @@ export class Sandbox extends BaseSandbox<Env> {
  * configured to send no credential of its own.
  */
 Sandbox.outbound = async (request: Request, env: Env) => {
-  const headers = new Headers(request.headers);
-  headers.set("authorization", `Bearer ${await env.MODEL_API_KEY.get()}`);
-  return fetch(new Request(request, { headers }));
+  const started = Date.now();
+  const url = new URL(request.url);
+
+  try {
+    const key = await env.MODEL_API_KEY.get();
+    const headers = new Headers(request.headers);
+    headers.set("authorization", `Bearer ${key}`);
+
+    const response = await fetch(new Request(request, { headers }));
+    log("outbound.forwarded", {
+      host: url.hostname,
+      path: url.pathname,
+      method: request.method,
+      status: response.status,
+      ms: Date.now() - started,
+    });
+    return response;
+  } catch (error) {
+    // A handler that throws leaves the container waiting on a request that
+    // will never answer, which is indistinguishable from a slow model.
+    const reason = error instanceof Error ? error.message : String(error);
+    log("outbound.failed", { host: url.hostname, path: url.pathname, reason });
+    return new Response(`outbound handler failed: ${reason}`, { status: 502 });
+  }
 };
