@@ -9,7 +9,7 @@ import {
 } from "core";
 import { Effect } from "effect";
 import { runWithGitHub } from "./github-runtime.ts";
-import { log, streamProcessLogs } from "./logging.ts";
+import { log, logProcessOutput } from "./logging.ts";
 import { MODEL_HOST } from "./sandbox.ts";
 
 const ARCHIVE_PATH = "/tmp/head.tar.gz";
@@ -104,16 +104,22 @@ export const runReview = async (
     return started.output({ encoding: "utf8" });
   };
 
-  /** Same as `run`, but the output reaches Workers Logs as it is produced. */
+  /**
+   * Same as `run`, but the output reaches Workers Logs afterwards.
+   *
+   * Streaming the output line by line was tried first and burned the step's
+   * CPU budget, which is 30 seconds by default and five minutes at most. A
+   * step that only awaits the process spends no CPU while it waits.
+   */
   const runLogged = async (command: ReadonlyArray<string>, name: string, timeout: number) => {
     const started = await sandbox.exec(command as [string, ...string[]], {
       cwd: WORKSPACE_PATH,
       env: { CODEX_HOME, CODEX_CA_CERTIFICATE: CA_CERTIFICATE_PATH },
       timeout,
     });
-    const output = await streamProcessLogs(started, name);
-    const exit = await started.waitForExit();
-    return { ...output, exitCode: exit.code, timedOut: exit.timedOut };
+    const output = await started.output({ encoding: "utf8" });
+    logProcessOutput(name, output);
+    return { stdout: output.stdout, stderr: output.stderr, exitCode: output.exitCode };
   };
 
   try {
@@ -167,15 +173,8 @@ export const runReview = async (
       REVIEW_TIMEOUT_MS,
     );
 
-    log("review.finished", {
-      exitCode: review.exitCode,
-      timedOut: review.timedOut,
-      stdoutBytes: review.stdout.length,
-    });
+    log("review.finished", { exitCode: review.exitCode, stdoutBytes: review.stdout.length });
 
-    if (review.timedOut) {
-      throw new Error(`the reviewing agent hit the ${REVIEW_TIMEOUT_MS}ms limit without finishing`);
-    }
     if (review.exitCode !== 0) {
       throw new Error(`the reviewing agent failed: ${review.stderr.slice(-2000)}`);
     }

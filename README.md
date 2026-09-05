@@ -330,8 +330,7 @@ which pull request and which Actions run it came from.
 
 **Workers & Pages** → `cloudfactory-review-worker` → **Observability**.
 
-Every line of the agent's output is logged as it is produced, so a slow review
-and a stuck one look different. Filter on these keys:
+The agent's output is logged when it exits. Filter on these keys:
 
 | `event`                 | Meaning                                                   |
 | ----------------------- | --------------------------------------------------------- |
@@ -347,6 +346,10 @@ and a stuck one look different. Filter on these keys:
 For a live stream instead, use **Logs** → **Live** on the same Worker. Live logs
 keep nothing; Observability stores them for 7 days on the Workers Paid plan.
 
+The agent's output arrives when it finishes, not while it runs. Streaming it
+line by line was tried and spent the step's CPU budget, which is 30 seconds by
+default and five minutes at most.
+
 ### Containers
 
 **Workers & Pages** → **Containers** shows status, health, and metrics. Container
@@ -361,8 +364,11 @@ SSH is enabled by default, but only for keys you list yourself. Add yours to the
 container entry in `apps/review-worker/wrangler.jsonc` and deploy:
 
 ```jsonc
+"ssh": { "enabled": true },
 "authorized_keys": [{ "name": "you", "public_key": "ssh-ed25519 AAAA..." }]
 ```
+
+Wrangler defaults `ssh.enabled` to `false`, so both lines are needed.
 
 Only `ssh-ed25519` keys work. Then, while an instance is running:
 

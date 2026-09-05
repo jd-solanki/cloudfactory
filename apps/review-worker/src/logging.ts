@@ -1,57 +1,45 @@
-import type { SandboxProcess } from "@cloudflare/sandbox";
-
 /** One structured line in Workers Logs. */
 export const log = (event: string, fields: Record<string, unknown> = {}): void => {
   console.log(JSON.stringify({ event, ...fields }));
 };
 
-const decoder = new TextDecoder();
+/** Workers Logs truncates a line past 256 KB, so stay well under it. */
+const MAX_CHUNK = 8_000;
 
-/** Keep a log line readable, and keep one runaway process from filling the log. */
-const MAX_LINE = 2_000;
+/** How much of one stream is worth keeping. Codex is chatty on stderr. */
+const MAX_STREAM = 64_000;
 
-export type ProcessOutcome = {
-  readonly stdout: string;
-  readonly stderr: string;
+const logStream = (name: string, stream: "stdout" | "stderr", text: string) => {
+  const kept = text.length > MAX_STREAM ? text.slice(-MAX_STREAM) : text;
+  if (kept.trim() === "") return;
+
+  for (let index = 0; index < kept.length; index += MAX_CHUNK) {
+    log("process.output", {
+      process: name,
+      stream,
+      truncated: kept.length < text.length,
+      chunk: kept.slice(index, index + MAX_CHUNK),
+    });
+  }
 };
 
 /**
- * Stream a process's output to Workers Logs while it runs, and return it.
+ * Put a finished process's output into Workers Logs.
  *
- * Waiting for a process to finish before logging anything means a hung command
- * looks identical to a slow one. Streaming makes the difference visible.
+ * The output is logged in chunks after the process exits rather than streamed
+ * while it runs. Streaming spends the step's CPU budget on decoding and
+ * logging; awaiting the process spends none.
  */
-export const streamProcessLogs = async (
-  process: SandboxProcess,
+export const logProcessOutput = (
   name: string,
-): Promise<ProcessOutcome> => {
-  const reader = (await process.logs({ follow: true })).getReader();
-  let stdout = "";
-  let stderr = "";
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value.type !== "stdout" && value.type !== "stderr") continue;
-
-      const text = decoder.decode(value.data);
-      if (value.type === "stdout") stdout += text;
-      else stderr += text;
-
-      for (const line of text.split("\n")) {
-        if (line.trim() !== "") {
-          log("process.output", {
-            process: name,
-            stream: value.type,
-            line: line.slice(0, MAX_LINE),
-          });
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  return { stdout, stderr };
+  output: { readonly stdout: string; readonly stderr: string; readonly exitCode: number },
+): void => {
+  log("process.exited", {
+    process: name,
+    exitCode: output.exitCode,
+    stdoutBytes: output.stdout.length,
+    stderrBytes: output.stderr.length,
+  });
+  logStream(name, "stdout", output.stdout);
+  logStream(name, "stderr", output.stderr);
 };
