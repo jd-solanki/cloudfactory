@@ -9,6 +9,7 @@ import {
 } from "core";
 import { Effect } from "effect";
 import { runWithGitHub } from "./github-runtime.ts";
+import { log, streamProcessLogs } from "./logging.ts";
 import { MODEL_HOST } from "./sandbox.ts";
 
 const ARCHIVE_PATH = "/tmp/head.tar.gz";
@@ -25,8 +26,10 @@ const CODEX_HOME = "/var/lib/codex";
 /** Sandbox installs its interception certificate at this fixed path. */
 const CA_CERTIFICATE_PATH = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
+const PROMPT_PATH = "/tmp/review-prompt.txt";
+
 const EXTRACT_TIMEOUT_MS = 120_000;
-const REVIEW_TIMEOUT_MS = 900_000;
+const REVIEW_TIMEOUT_MS = 600_000;
 
 /**
  * The agent sends no credential. The Worker attaches one to every request that
@@ -101,6 +104,18 @@ export const runReview = async (
     return started.output({ encoding: "utf8" });
   };
 
+  /** Same as `run`, but the output reaches Workers Logs as it is produced. */
+  const runLogged = async (command: ReadonlyArray<string>, name: string, timeout: number) => {
+    const started = await sandbox.exec(command as [string, ...string[]], {
+      cwd: WORKSPACE_PATH,
+      env: { CODEX_HOME, CODEX_CA_CERTIFICATE: CA_CERTIFICATE_PATH },
+      timeout,
+    });
+    const output = await streamProcessLogs(started, name);
+    const exit = await started.waitForExit();
+    return { ...output, exitCode: exit.code, timedOut: exit.timedOut };
+  };
+
   try {
     await sandbox.mkdir(WORKSPACE_PATH, { recursive: true });
     await sandbox.mkdir(CODEX_HOME, { recursive: true });
@@ -117,11 +132,15 @@ export const runReview = async (
     if (extracted.exitCode !== 0) {
       throw new Error(`could not extract the head revision: ${extracted.stderr}`);
     }
+    log("checkout.extracted", { headSha: request.headSha });
 
     // A repository owns its own review rules. Absent rules fall back to ours.
     const own = await run(shell(`cat ${WORKSPACE_PATH}/${REVIEW_INSTRUCTIONS_PATH}`));
-    const instructions =
-      own.exitCode === 0 && own.stdout.trim() !== "" ? own.stdout : DEFAULT_REVIEW_INSTRUCTIONS;
+    const ownInstructions = own.exitCode === 0 && own.stdout.trim() !== "";
+    const instructions = ownInstructions ? own.stdout : DEFAULT_REVIEW_INSTRUCTIONS;
+    log("checkout.instructions", {
+      source: ownInstructions ? REVIEW_INSTRUCTIONS_PATH : "default",
+    });
 
     await sandbox.writeFile(DIFF_PATH, diff);
     await sandbox.writeFile(INSTRUCTIONS_PATH, instructions);
@@ -130,18 +149,33 @@ export const runReview = async (
     // The container is already the isolation boundary: no credential, one
     // reachable host, destroyed at the end. Codex's own nested sandbox needs
     // user namespaces that are not available here, so it is turned off.
-    const review = await run(
+    //
+    // stdin is redirected from /dev/null because a sandbox process has no stdin
+    // at all, and codex reads it for extra prompt text. Without an immediate
+    // end of file it waits for input that can never arrive.
+    await sandbox.writeFile(PROMPT_PATH, REVIEW_PROMPT);
+    log("review.started", { headSha: request.headSha, attempt });
+
+    const review = await runLogged(
       [
-        "codex",
-        "exec",
-        "--skip-git-repo-check",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--output-last-message",
-        OUTPUT_PATH,
-        REVIEW_PROMPT,
+        "/bin/bash",
+        "-lc",
+        `codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox` +
+          ` --output-last-message ${OUTPUT_PATH} "$(cat ${PROMPT_PATH})" < /dev/null`,
       ],
+      "codex",
       REVIEW_TIMEOUT_MS,
     );
+
+    log("review.finished", {
+      exitCode: review.exitCode,
+      timedOut: review.timedOut,
+      stdoutBytes: review.stdout.length,
+    });
+
+    if (review.timedOut) {
+      throw new Error(`the reviewing agent hit the ${REVIEW_TIMEOUT_MS}ms limit without finishing`);
+    }
     if (review.exitCode !== 0) {
       throw new Error(`the reviewing agent failed: ${review.stderr.slice(-2000)}`);
     }
@@ -160,5 +194,6 @@ export const runReview = async (
     };
   } finally {
     await sandbox.destroy();
+    log("sandbox.destroyed", { headSha: request.headSha, attempt });
   }
 };

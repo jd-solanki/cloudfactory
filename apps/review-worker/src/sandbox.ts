@@ -15,7 +15,9 @@ export const MODEL_HOST = "api.openai.com";
 export class Sandbox extends BaseSandbox<Env> {
   enableInternet = false;
   allowedHosts = [MODEL_HOST];
-  sleepAfter = "5m";
+  // A terminated Workflow cannot run cleanup, so an orphaned container has to
+  // time itself out. Keep that window short.
+  sleepAfter = "2m";
 }
 
 /**

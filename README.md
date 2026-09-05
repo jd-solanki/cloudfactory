@@ -313,6 +313,71 @@ documentation. None of those are part of the Worker.
 Only a `Dockerfile` change rebuilds and pushes the container image. Every other
 deploy reuses the image you already have, so it finishes in seconds.
 
+## Watching a review
+
+Everything below is in the Cloudflare dashboard at <https://dash.cloudflare.com>.
+
+### Is a review running, and which step is it on
+
+**Workflows** in the sidebar, then the **review** Workflow. Each instance shows
+its status, its step history, and the error that stopped it. The default window
+is the last 24 hours.
+
+An instance is named `review-<sha>-<pr>-<actions run id>-<repo>`, so you can tell
+which pull request and which Actions run it came from.
+
+### What the reviewing agent is doing
+
+**Workers & Pages** → `cloudfactory-review-worker` → **Observability**.
+
+Every line of the agent's output is logged as it is produced, so a slow review
+and a stuck one look different. Filter on these keys:
+
+| `event`                 | Meaning                                                   |
+| ----------------------- | --------------------------------------------------------- |
+| `run.started`           | a Run claimed a pull request                              |
+| `checkout.extracted`    | the revision is in the sandbox                            |
+| `checkout.instructions` | which instructions were used                              |
+| `review.started`        | the agent is about to run                                 |
+| `process.output`        | one line from the agent, `stream` is `stdout` or `stderr` |
+| `review.finished`       | `exitCode` and `timedOut`                                 |
+| `sandbox.destroyed`     | the container is gone                                     |
+| `run.failed`            | why the Run stopped                                       |
+
+For a live stream instead, use **Logs** → **Live** on the same Worker. Live logs
+keep nothing; Observability stores them for 7 days on the Workers Paid plan.
+
+### Containers
+
+**Workers & Pages** → **Containers** shows status, health, and metrics. Container
+logs need `observability.enabled`, which this Worker already sets.
+
+A container that outlives its Run sleeps after two minutes. Terminating a
+Workflow cannot run the Run's own cleanup, so that timeout is the backstop.
+
+### Opening a shell in the sandbox
+
+SSH is enabled by default, but only for keys you list yourself. Add yours to the
+container entry in `apps/review-worker/wrangler.jsonc` and deploy:
+
+```jsonc
+"authorized_keys": [{ "name": "you", "public_key": "ssh-ed25519 AAAA..." }]
+```
+
+Only `ssh-ed25519` keys work. Then, while an instance is running:
+
+```bash
+wrangler containers list
+wrangler containers instances <container-id>
+wrangler containers ssh <instance-id>
+```
+
+No port is opened to the internet. A connection needs both write access to the
+container in your Cloudflare account and a listed key.
+
+Keep your key out of commits. A public key in the repository default would
+authorize one person on every deployment of this project.
+
 ## Many projects
 
 One deployment serves every repository. Nothing in the Worker is tied to a

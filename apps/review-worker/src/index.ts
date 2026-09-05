@@ -3,6 +3,7 @@ import { NonRetryableError } from "cloudflare:workflows";
 import { GitHub, type ReviewRequest, parseReviewRequest, setReviewState } from "core";
 import { Effect } from "effect";
 import { runWithGitHub } from "./github-runtime.ts";
+import { log } from "./logging.ts";
 import { type ReviewOutcome, runReview } from "./run-review.ts";
 
 export { ContainerProxy, Sandbox } from "./sandbox.ts";
@@ -19,7 +20,7 @@ const STEP_RETRIES = {
 /** A checkout and a full agent session need far longer than an API call. */
 const REVIEW_RETRIES = {
   retries: { limit: 2, delay: "30 seconds", backoff: "exponential" },
-  timeout: "20 minutes",
+  timeout: "15 minutes",
 } as const;
 
 const renderReview = (outcome: ReviewOutcome) =>
@@ -39,6 +40,12 @@ export class ReviewWorkflow extends WorkflowEntrypoint<Env, ReviewRequest> {
       throw new NonRetryableError(`invalid review request: ${parsed.left.reason}`);
     }
     const request = parsed.right;
+    log("run.started", {
+      instanceId: event.instanceId,
+      repo: `${request.owner}/${request.repo}`,
+      pullNumber: request.pullNumber,
+      headSha: request.headSha,
+    });
 
     // Claim the request before any slow work, so the pull request shows that a
     // Run owns it rather than looking untouched for the length of a review.
@@ -66,7 +73,12 @@ export class ReviewWorkflow extends WorkflowEntrypoint<Env, ReviewRequest> {
         await runWithGitHub(this.env, setReviewState(request, null));
         return { state: "none" };
       });
+      log("run.finished", { instanceId: event.instanceId, headSha: request.headSha });
     } catch (error) {
+      log("run.failed", {
+        instanceId: event.instanceId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
       // Retries are already exhausted here, so the pull request must not be
       // left claiming that a review is still running.
       await step.do("mark-run-failed", STEP_RETRIES, async () => {
