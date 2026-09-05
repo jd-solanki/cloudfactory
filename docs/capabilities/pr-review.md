@@ -64,6 +64,7 @@ analyze -> verify finding -> fix -> re-review
 | Current state      | Event                                     | Next state           | Effect                                              |
 | ------------------ | ----------------------------------------- | -------------------- | --------------------------------------------------- |
 | none               | Maintainer applies `agent:review`         | `agent:reviewing`    | Remove `agent:review` and start the review Workflow |
+| `agent:reviewing`  | Review published                          | no state label       | The comment carries the outcome                     |
 | any active state   | New head SHA                              | `agent:reviewing`    | Supersede stale work and review the new SHA         |
 | `agent:reviewing`  | No actionable findings                    | `agent:clean`        | Stop                                                |
 | `agent:reviewing`  | Safe, actionable findings                 | `agent:fix-needed`   | Start fix Workflow                                  |
@@ -73,6 +74,11 @@ analyze -> verify finding -> fix -> re-review
 | `agent:fixing`     | Conflict, unsafe change, or attempt limit | `agent:human-needed` | Stop and notify                                     |
 | any active state   | Infrastructure failure                    | `agent:failed`       | Permit explicit retry                               |
 | any                | PR closed or merged                       | no state label       | Terminate active Workflows                          |
+
+Until a verifier exists, a Run cannot tell a clean revision from one needing
+human judgment, so it implements only three rows: it claims `agent:review` as
+`agent:reviewing`, clears the state once the comment is published, and moves to
+`agent:failed` when the Run cannot finish.
 
 Labels are a human-visible projection. Workflow state and validated structured decisions remain authoritative.
 

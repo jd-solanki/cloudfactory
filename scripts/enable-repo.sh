@@ -5,13 +5,22 @@
 # the workflow file that starts a Run. Safe to run again on the same repository.
 set -euo pipefail
 
-readonly LABEL="agent:review"
+# The request label plus every state a Run projects. Creating them up front
+# means a Run never depends on a label being made for it mid-flight.
+# Fields are pipe separated because the label names contain colons.
+readonly LABELS="agent:review|5319E7|Ask the Code Factory to review this pull request
+agent:reviewing|FBCA04|A Run is reviewing this pull request
+agent:failed|B60205|A Run failed. Apply agent:review to try again"
+readonly REQUEST_LABEL="agent:review"
 readonly WORKFLOW_PATH=".github/workflows/agent-review.yml"
 readonly DEFAULT_REF="jd-solanki/cloudfactory@v1"
 
 usage() {
   cat <<USAGE
 Usage: scripts/enable-repo.sh --token TOKEN --account ID ORG/REPO [ORG/REPO...]
+
+Creates the agent:review, agent:reviewing and agent:failed labels, sets the
+two Cloudflare secrets, and commits the workflow file.
 
 Options:
   --token TOKEN    Cloudflare API token with account-scoped Workers Scripts: Write
@@ -114,12 +123,15 @@ enable() {
   echo "==> ${repo}"
 
   # gh label create fails when the label is already there, which is fine.
-  if gh label create "$LABEL" --repo "$repo" --color 5319E7 \
-    --description "Ask the Code Factory to review this pull request" >/dev/null 2>&1; then
-    echo "    label created"
-  else
-    echo "    label already present"
-  fi
+  while IFS="|" read -r name color description; do
+    [ -n "$name" ] || continue
+    if gh label create "$name" --repo "$repo" --color "$color" \
+      --description "$description" >/dev/null 2>&1; then
+      echo "    label ${name} created"
+    else
+      echo "    label ${name} already present"
+    fi
+  done <<<"$LABELS"
 
   gh secret set CLOUDFLARE_API_TOKEN --repo "$repo" --body "$token"
   gh secret set CLOUDFLARE_ACCOUNT_ID --repo "$repo" --body "$account"
@@ -148,7 +160,7 @@ enable() {
     echo "    workflow unchanged"
   fi
 
-  echo "    done. Apply the ${LABEL} label to a pull request."
+  echo "    done. Apply the ${REQUEST_LABEL} label to a pull request."
 }
 
 for repo in "${repos[@]}"; do

@@ -69,8 +69,10 @@ jobs:
             --arg headSha "$HEAD_SHA" \
             '{version: 1, owner: $owner, repo: $repo, pullNumber: $pullNumber, headSha: $headSha}')
 
-          # The Workflows API takes `params` as a JSON-encoded string.
-          body=$(jq -nc --arg id "$instance_id" --arg params "$params" \
+          # The Workflows API takes `params` as a JSON object and hands it to
+          # the Workflow verbatim. Its API reference calls this field a string,
+          # but a string arrives as a string and never as the payload.
+          body=$(jq -nc --arg id "$instance_id" --argjson params "$params" \
             '{instance_id: $id, params: $params}')
 
           status=$(curl -sS -o create.json -w '%{http_code}' -X POST "$base" \

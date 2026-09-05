@@ -170,6 +170,13 @@ export class GitHub extends Effect.Service<GitHub>()("cloudfactory/GitHub", {
               });
         }),
 
+      /** Add one label, leaving every other label alone. */
+      addLabel: (target: PullRequestRef, label: string) =>
+        send(`${issuePath(target)}/labels`, {
+          method: "POST",
+          body: JSON.stringify({ labels: [label] }),
+        }).pipe(Effect.asVoid),
+
       /** Remove one label. An absent label is already the wanted end state. */
       removeLabel: (target: PullRequestRef, label: string) =>
         send(`${issuePath(target)}/labels/${encodeURIComponent(label)}`, {

@@ -13,7 +13,10 @@ variable "account_id" {
 }
 
 variable "store_name" {
-  description = "Name of the Secrets Store this module creates."
+  description = <<-EOT
+    Name for the Secrets Store, used only when the account has none yet.
+    An account that already has a store keeps it, whatever it is called.
+  EOT
   type        = string
   default     = "cloudfactory"
 }

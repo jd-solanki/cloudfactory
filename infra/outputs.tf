@@ -1,6 +1,6 @@
 output "secrets_store_id" {
   description = "Put this in the store_id fields of apps/review-worker/wrangler.jsonc."
-  value       = cloudflare_secrets_store.cloudfactory.id
+  value       = local.store_id
 }
 
 output "account_id" {

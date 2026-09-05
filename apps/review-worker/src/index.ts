@@ -1,14 +1,11 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
-import { GitHub, type ReviewRequest, parseReviewRequest } from "core";
+import { GitHub, type ReviewRequest, parseReviewRequest, setReviewState } from "core";
 import { Effect } from "effect";
 import { runWithGitHub } from "./github-runtime.ts";
 import { type ReviewOutcome, runReview } from "./run-review.ts";
 
 export { ContainerProxy, Sandbox } from "./sandbox.ts";
-
-/** The label a maintainer applies to request a Run. */
-const REQUEST_LABEL = "agent:review";
 
 /**
  * Cloudflare Workflows owns durable recovery, so a step retries only the
@@ -43,27 +40,41 @@ export class ReviewWorkflow extends WorkflowEntrypoint<Env, ReviewRequest> {
     }
     const request = parsed.right;
 
-    const outcome = await step.do("review-head-revision", REVIEW_RETRIES, (context) =>
-      runReview(this.env, request, context.attempt),
-    );
-
-    await step.do("publish-review-comment", STEP_RETRIES, async () => {
-      await runWithGitHub(
-        this.env,
-        Effect.flatMap(GitHub, (github) =>
-          github.upsertReviewComment(request, renderReview(outcome)),
-        ),
-      );
-      return { headSha: request.headSha };
+    // Claim the request before any slow work, so the pull request shows that a
+    // Run owns it rather than looking untouched for the length of a review.
+    await step.do("claim-request", STEP_RETRIES, async () => {
+      await runWithGitHub(this.env, setReviewState(request, "reviewing"));
+      return { state: "reviewing" };
     });
 
-    await step.do("clear-request-label", STEP_RETRIES, async () => {
-      await runWithGitHub(
-        this.env,
-        Effect.flatMap(GitHub, (github) => github.removeLabel(request, REQUEST_LABEL)),
+    try {
+      const outcome = await step.do("review-head-revision", REVIEW_RETRIES, (context) =>
+        runReview(this.env, request, context.attempt),
       );
-      return { label: REQUEST_LABEL };
-    });
+
+      await step.do("publish-review-comment", STEP_RETRIES, async () => {
+        await runWithGitHub(
+          this.env,
+          Effect.flatMap(GitHub, (github) =>
+            github.upsertReviewComment(request, renderReview(outcome)),
+          ),
+        );
+        return { headSha: request.headSha };
+      });
+
+      await step.do("clear-review-state", STEP_RETRIES, async () => {
+        await runWithGitHub(this.env, setReviewState(request, null));
+        return { state: "none" };
+      });
+    } catch (error) {
+      // Retries are already exhausted here, so the pull request must not be
+      // left claiming that a review is still running.
+      await step.do("mark-run-failed", STEP_RETRIES, async () => {
+        await runWithGitHub(this.env, setReviewState(request, "failed"));
+        return { state: "failed" };
+      });
+      throw error;
+    }
   }
 }
 
