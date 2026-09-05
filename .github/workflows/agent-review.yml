@@ -1,0 +1,11 @@
+# Managed by scripts/enable-repo.sh in jd-solanki/cloudfactory.
+name: Code Factory review
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+jobs:
+  review:
+    uses: jd-solanki/cloudfactory/.github/workflows/review.yml@v1
+    secrets: inherit
