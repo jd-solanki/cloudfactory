@@ -9,7 +9,6 @@ import {
 import { Effect } from "effect";
 import { runWithGitHub } from "./github-runtime.ts";
 import { log, logProcessOutput } from "./logging.ts";
-import { MODEL_HOST } from "./sandbox.ts";
 
 const ARCHIVE_PATH = "/tmp/head.tar.gz";
 const DIFF_PATH = "/tmp/pull-request.diff";
@@ -38,17 +37,21 @@ const SHORT_COMMAND_TIMEOUT_MS = 30_000;
  * The agent sends no credential. The Worker attaches one to every request that
  * leaves the container, so this provider deliberately declares no `env_key`.
  */
-const CODEX_CONFIG = `model_provider = "cloudflare-proxy"
-
-[model_providers.cloudflare-proxy]
-name = "cloudflare-proxy"
-base_url = "https://${MODEL_HOST}/v1"
-wire_api = "responses"
-# The Workflow already retries, so the agent gives up quickly instead of
-# spending a step timeout reconnecting to a request that cannot succeed.
-request_max_retries = 2
-stream_max_retries = 2
-`;
+const codexConfig = (env: Env) =>
+  [
+    `model = "${env.MODEL_NAME}"`,
+    'model_provider = "review"',
+    "",
+    "[model_providers.review]",
+    'name = "review"',
+    `base_url = "${env.MODEL_BASE_URL}"`,
+    'wire_api = "responses"',
+    "# The Workflow already retries, so the agent gives up quickly instead of",
+    "# spending a step timeout reconnecting to a request that cannot succeed.",
+    "request_max_retries = 2",
+    "stream_max_retries = 2",
+    "",
+  ].join("\n");
 
 const REVIEW_PROMPT = `Review one pull request.
 
@@ -145,7 +148,7 @@ export const prepareReview = async (
     ownInstructions ? own.stdout : DEFAULT_REVIEW_INSTRUCTIONS,
   );
   await sandbox.writeFile(PROMPT_PATH, REVIEW_PROMPT);
-  await sandbox.writeFile(`${CODEX_HOME}/config.toml`, CODEX_CONFIG);
+  await sandbox.writeFile(`${CODEX_HOME}/config.toml`, codexConfig(env));
 
   const counted = await run(sandbox, `find ${WORKSPACE_PATH} -type f | wc -l`);
 

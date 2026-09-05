@@ -39,8 +39,8 @@ resource "cloudflare_secrets_store_secret" "github_token" {
 resource "cloudflare_secrets_store_secret" "openai_api_key" {
   account_id = var.account_id
   store_id   = local.store_id
-  name       = "openai-api-key"
+  name       = "model-api-key"
   scopes     = ["workers"]
-  value      = var.openai_api_key
+  value      = var.model_api_key
   comment    = "Attached to outbound model requests by the Worker."
 }

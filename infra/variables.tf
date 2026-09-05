@@ -30,10 +30,10 @@ variable "github_token" {
   sensitive   = true
 }
 
-variable "openai_api_key" {
+variable "model_api_key" {
   description = <<-EOT
-    Model credential. The Worker attaches it to outbound requests, so it never
-    exists inside the review container.
+    Credential for the model endpoint. The Worker attaches it to outbound
+    requests, so it never exists inside the review container.
   EOT
   type        = string
   sensitive   = true

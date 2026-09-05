@@ -83,7 +83,10 @@ export class ReviewWorkflow extends WorkflowEntrypoint<Env, ReviewRequest> {
       }
 
       if (!finished) {
-        await abandonSandbox(this.env, sandboxId);
+        await step.do("abandon-sandbox", STEP_RETRIES, async () => {
+          await abandonSandbox(this.env, sandboxId);
+          return { sandboxId };
+        });
         throw new Error("the reviewing agent did not finish within the time allowed");
       }
 
