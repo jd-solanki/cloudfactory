@@ -1,6 +1,6 @@
 # Code Factory
 
-The Code Factory reviews pull requests. It checks out the exact head revision
+The Code Factori reviews pull requests. It checks out the exact head revision
 in an isolated sandbox, reviews the change with a coding agent, and posts the
 result as one comment.
 
