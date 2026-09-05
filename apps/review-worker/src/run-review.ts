@@ -117,7 +117,7 @@ export const prepareReview = async (
   env: Env,
   request: ReviewRequest,
   sandboxId: string,
-): Promise<{ readonly fileCount: number }> => {
+): Promise<{ readonly fileCount: number; readonly modelReachable: string }> => {
   const [archive, diff] = await runWithGitHub(
     env,
     Effect.flatMap(GitHub, (github) =>
@@ -159,6 +159,16 @@ export const prepareReview = async (
 
   const counted = await run(sandbox, `find ${WORKSPACE_PATH} -type f | wc -l`);
 
+  // Ask the container what the model endpoint answers, before handing it to the
+  // agent. Workers Logs does not carry a Workflow's own logs, so this rides
+  // back in the step's return value, which the dashboard always shows.
+  // 200 means the outbound handler attached a working credential. 401 means it
+  // did not. 000 means nothing answered at all.
+  const reachable = await run(
+    sandbox,
+    `curl -sS -o /dev/null -m 20 -w '%{http_code}' ${env.MODEL_BASE_URL}/models 2>&1 || true`,
+  );
+
   // The container is already the isolation boundary: no credential, one
   // reachable host, destroyed at the end. Codex's own nested sandbox needs user
   // namespaces that are not available here, so it is turned off.
@@ -179,8 +189,9 @@ export const prepareReview = async (
   );
 
   const fileCount = Number.parseInt(counted.stdout.trim(), 10);
-  log("review.started", { headSha: request.headSha, fileCount });
-  return { fileCount };
+  const modelReachable = reachable.stdout.trim().slice(0, 200);
+  log("review.started", { headSha: request.headSha, fileCount, modelReachable });
+  return { fileCount, modelReachable };
 };
 
 /** Ask whether the agent has finished, and how far it has got. */
