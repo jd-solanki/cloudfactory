@@ -5,6 +5,19 @@
   "compatibility_date": "2026-09-04",
   "observability": { "enabled": true },
 
+  // Point these at your model endpoint. The endpoint's host is the only host
+  // the review container may reach.
+  "vars": {
+    "MODEL_BASE_URL": "https://aisubs-gw.jdsolanki0001.workers.dev/aisubs/chatgpt/default/v1",
+    "MODEL_NAME": "gpt-5.6-luna",
+    "MODEL_REASONING_EFFORT": "low",
+  },
+
+  // A step that shells out to an agent spends its CPU on the wait, not on
+  // work, but the 30 second default leaves no headroom for the output it
+  // brings back. Five minutes is the ceiling Cloudflare allows.
+  "limits": { "cpu_ms": 300000 },
+
   // "name" is the {workflow_name} path segment the GitHub Action posts to.
   "workflows": [
     {
@@ -19,13 +32,13 @@
   "secrets_store_secrets": [
     {
       "binding": "GITHUB_TOKEN",
-      "store_id": "REPLACE_WITH_SECRETS_STORE_ID",
+      "store_id": "dbe91e8e7bed44c2b0618abf954eac6e",
       "secret_name": "github-token",
     },
     {
-      "binding": "OPENAI_API_KEY",
-      "store_id": "REPLACE_WITH_SECRETS_STORE_ID",
-      "secret_name": "openai-api-key",
+      "binding": "MODEL_API_KEY",
+      "store_id": "dbe91e8e7bed44c2b0618abf954eac6e",
+      "secret_name": "model-api-key",
     },
   ],
 
@@ -39,6 +52,16 @@
       "class_name": "Sandbox",
       "image": "./Dockerfile",
       "instance_type": "standard-1",
+      // wrangler defaults ssh.enabled to false, whatever the changelog says.
+      "ssh": { "enabled": true },
+      // Local only. Never commit a key here: an open-source default would
+      // authorize one person's key on everybody else's containers.
+      "authorized_keys": [
+        {
+          "name": "jd",
+          "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICHoF/CTnrUvIIb9O1M4Czkh9wLTsB9lLeuBvJewSI77 jdsolanki0001@gmail.com",
+        },
+      ],
       "max_instances": 5,
     },
   ],
